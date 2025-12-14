@@ -6,11 +6,13 @@ from bot.command_menu import set_bot_commands
 
 from bot.handlers.registration import command_start_handler
 from bot.handlers.llm_session import (
-    handle_llm_message, 
+    handle_llm_message,
     handle_regular_message,
     start_llm_session,
     stop_llm_session,
-    process_start_session
+    process_start_session,
+    add_telegram_channel,
+    show_rag_stats
 )
 
 from bot.states import RegistrationStates, LLMSessionStates
@@ -22,16 +24,18 @@ async def on_startup():
 
 async def start():
     await create_db_pool()
-    
+
     dp = get_dispatcher()
-    
+
     dp.message.register(command_start_handler, Command("start"), F.chat.type == "private")
     dp.message.register(start_llm_session, Command("session"))
     dp.message.register(stop_llm_session, Command("stop"))
-    
-    dp.message.register(handle_llm_message, LLMSessionStates.active_session)
-    dp.message.register(handle_regular_message, RegistrationStates.waiting_for_llm_session)
-    
+    dp.message.register(add_telegram_channel, Command("add_channel"))
+    dp.message.register(show_rag_stats, Command("stats"))
+
+    dp.message.register(handle_llm_message, LLMSessionStates.active_session, F.text.startswith("/").is_(False))
+    dp.message.register(handle_regular_message, RegistrationStates.waiting_for_llm_session, F.text.startswith("/").is_(False))
+
     dp.callback_query.register(process_start_session, F.data == "start_session")
 
     dp.startup.register(on_startup)

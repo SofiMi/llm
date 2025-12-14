@@ -1,12 +1,10 @@
-import asyncpg
-from bot.config import DATABASE_URL
 
-db_pool = None
+registered_users = set()
 
 async def create_db_pool():
-    global db_pool
-    db_pool = await asyncpg.create_pool(DATABASE_URL)
-    return db_pool
+    global registered_users
+    registered_users = set()
+    return True
 
 async def get_pool():
-    return db_pool 
+    return True
