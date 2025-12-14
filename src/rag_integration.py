@@ -1,6 +1,3 @@
-"""
-Интеграция RAG функциональности с реальной ChromaDB
-"""
 import asyncio
 import os
 import sys

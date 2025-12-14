@@ -1,7 +1,3 @@
-"""
-Менеджер контекста сессии для LLM бота
-Управляет историей диалога с умным сжатием контекста
-"""
 from typing import List, Dict, Optional
 from datetime import datetime
 import json
@@ -17,8 +13,6 @@ class Message:
 
 
 class SessionContextManager:
-    """Менеджер контекста диалоговой сессии"""
-
     def __init__(self, max_recent_messages: int = 6, max_context_length: int = 3000):
         """
         Args:
