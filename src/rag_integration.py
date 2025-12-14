@@ -279,10 +279,13 @@ class RealRAGBot:
             gc.collect()
             raise Exception(f"Ошибка при обработке канала {channel_link}: {str(e)}")
 
-    async def query_rag(self, question: str, user_id: int, topk: int = 5) -> str:
-        """Запрос к RAG системе"""
+    async def query_rag(self, question: str, user_id: int, dialog_context: str = "", topk: int = 5) -> str:
+        """Запрос к RAG системе с учетом контекста диалога"""
         try:
-            docs = self.db.query(question, topk=topk)
+            # Формируем улучшенный запрос с учетом контекста диалога
+            enhanced_query = self._create_enhanced_query(question, dialog_context)
+
+            docs = self.db.query(enhanced_query, topk=topk)
 
             if not docs:
                 return (
@@ -298,21 +301,19 @@ class RealRAGBot:
                 if doc["meta"] and "source" in doc["meta"]:
                     sources.add(doc["meta"]["source"])
 
-            context = "\n\n".join(context_parts)
+            rag_context = "\n\n".join(context_parts)
 
             if self.llm_available:
                 try:
-                    prompt_message = self.prompt.format(
-                        system_prompt=RAG_SYSTEM_PROMPT,
-                        context=context,
-                        question=question
+                    # Формируем промпт с учетом диалогового контекста
+                    full_prompt = self._create_context_aware_prompt(
+                        question, dialog_context, rag_context
                     )
-                    result = self.llm.invoke(prompt_message)
+
+                    result = self.llm.invoke(full_prompt)
                     llm_response = getattr(result, "content", None) or getattr(result, "text", None) or str(result)
 
-                    response = f"{llm_response}"
-
-                    return response
+                    return llm_response
 
                 except Exception as e:
                     print(f"[DEBUG] Ошибка LLM: {e}")
@@ -337,6 +338,61 @@ class RealRAGBot:
 
         except Exception as e:
             return f"❌ Ошибка при поиске: {str(e)}"
+
+    def _create_enhanced_query(self, question: str, dialog_context: str) -> str:
+        """Создать улучшенный запрос с учетом контекста диалога"""
+        if not dialog_context:
+            return question
+
+        # Извлекаем ключевые термины из контекста
+        context_lines = dialog_context.split('\n')
+        recent_topics = []
+
+        for line in context_lines[-5:]:  # Последние 5 строк контекста
+            if 'Пользователь:' in line:
+                user_text = line.split('Пользователь:')[-1].strip()
+                if user_text and len(user_text) > 10:
+                    # Берем первые несколько слов как тему
+                    words = user_text.split()[:5]
+                    if len(words) >= 2:
+                        recent_topics.append(' '.join(words))
+
+        if recent_topics:
+            enhanced_query = f"{question} {' '.join(recent_topics[-2:])}"  # Добавляем последние 2 темы
+        else:
+            enhanced_query = question
+
+        return enhanced_query[:500]  # Ограничиваем длину запроса
+
+    def _create_context_aware_prompt(self, question: str, dialog_context: str, rag_context: str) -> str:
+        """Создать промпт с учетом диалогового контекста"""
+        base_prompt = RAG_SYSTEM_PROMPT
+
+        if dialog_context:
+            prompt = f"""{base_prompt}
+
+Контекст текущего диалога:
+{dialog_context}
+
+Релевантная информация из базы знаний:
+{rag_context}
+
+ВАЖНО: При ответе учитывай контекст диалога. Если пользователь ссылается на что-то упомянутое ранее ("это", "то", "об этом"), используй информацию из диалога для понимания, о чем идет речь.
+
+Вопрос пользователя: {question}
+
+Ответ:"""
+        else:
+            prompt = f"""{base_prompt}
+
+Релевантная информация:
+{rag_context}
+
+Вопрос: {question}
+
+Ответ:"""
+
+        return prompt
 
     def get_stats(self) -> str:
         """Статистика RAG базы данных"""
@@ -387,7 +443,7 @@ class MockRAGBot:
 
         return f"⚠️ Заглушка: канал {channel_link} 'добавлен' ({limit} постов)\n🔧 Для полной функциональности установите зависимости RAG"
 
-    async def query_rag(self, question: str, user_id: int) -> str:
+    async def query_rag(self, question: str, user_id: int, dialog_context: str = "") -> str:
         """Запрос к RAG системе (заглушка)"""
         await asyncio.sleep(0.5)
 
@@ -396,9 +452,13 @@ class MockRAGBot:
 
         context_info = [f"'{ch}': {data['posts_count']} постов" for ch, data in self.channels_data.items()]
 
+        context_note = ""
+        if dialog_context:
+            context_note = f"\n🧠 Учитывается контекст диалога ({len(dialog_context)} символов)"
+
         return (
             f"⚠️ **ЗАГЛУШКА RAG** (установите зависимости для полной работы)\n\n"
-            f"📊 Доступные источники: {', '.join(context_info)}\n\n"
+            f"📊 Доступные источники: {', '.join(context_info)}{context_note}\n\n"
             f"💭 По запросу '{question[:100]}{'...' if len(question) > 100 else ''}':\n"
             f"В полной версии здесь был бы реальный ответ на основе анализа {len(self.channels_data)} каналов."
         )
@@ -432,9 +492,9 @@ async def parse_telegram_channel(channel_link: str, limit: int = 30) -> str:
     return await rag_system.parse_and_add_channel(channel_link, limit)
 
 
-async def query_rag_system(question: str, user_id: int) -> str:
-    """Запрос к RAG системе"""
-    return await rag_system.query_rag(question, user_id)
+async def query_rag_system(question: str, user_id: int, dialog_context: str = "") -> str:
+    """Запрос к RAG системе с учетом контекста диалога"""
+    return await rag_system.query_rag(question, user_id, dialog_context)
 
 
 def get_rag_stats() -> str:

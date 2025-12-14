@@ -2,25 +2,64 @@ from aiogram import types
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram import F
+import json
 
 from bot.states import LLMSessionStates, RegistrationStates
 from bot.dispatcher import dp
 from bot.db import user_exists
+from bot.session_context import SessionContextManager
 from rag_integration import parse_telegram_channel, query_rag_system, get_rag_stats
 
-async def call_llm(user_message: str, user_id: int) -> str:
-    """Вызов RAG системы для ответа на вопросы пользователя"""
-    return await query_rag_system(user_message, user_id)
+async def get_session_context(state: FSMContext) -> SessionContextManager:
+    """Получить или создать менеджер контекста сессии"""
+    data = await state.get_data()
+    context_data = data.get("session_context")
+
+    if context_data:
+        try:
+            return SessionContextManager.from_dict(context_data)
+        except Exception:
+            # Если не удалось восстановить, создаем новый
+            pass
+
+    return SessionContextManager()
+
+async def save_session_context(state: FSMContext, context_manager: SessionContextManager):
+    """Сохранить менеджер контекста в состояние"""
+    await state.update_data(session_context=context_manager.to_dict())
+
+async def call_llm(user_message: str, user_id: int, dialog_context: str = "") -> str:
+    """Вызов RAG системы для ответа на вопросы пользователя с учетом контекста"""
+    return await query_rag_system(user_message, user_id, dialog_context)
 
 async def start_llm_session(message: types.Message, state: FSMContext):
     if not await user_exists(message.from_user.id):
         await message.answer("❌ Сначала зарегистрируйтесь с помощью /start")
         return
 
+    current_state = await state.get_state()
+
+    # Проверяем, уже ли мы в активной сессии
+    if current_state == LLMSessionStates.active_session:
+        # Если уже в сессии, не сбрасываем контекст
+        context_manager = await get_session_context(state)
+        stats = context_manager.get_session_stats()
+
+        await message.answer(
+            f"💫 Вы уже в активной сессии с AI!\n\n"
+            f"📊 В текущем диалоге: {stats['user_messages']} вопросов и {stats['assistant_messages']} ответов\n\n"
+            "Продолжайте диалог или используйте /stop для завершения сессии."
+        )
+        return
+
+    # Только при новой сессии очищаем контекст
+    context_manager = SessionContextManager()
+    await save_session_context(state, context_manager)
+
     await state.set_state(LLMSessionStates.active_session)
     await message.answer(
-        "💫 Сессия с AI начата!\n\n"
-        "Теперь все ваши сообщения будут обрабатываться AI. "
+        "💫 Новая сессия с AI начата!\n\n"
+        "Теперь все ваши сообщения будут обрабатываться AI с сохранением контекста диалога. "
         "Для выхода из сессии используйте /stop\n\n"
         "Задавайте ваш вопрос:"
     )
@@ -28,9 +67,22 @@ async def start_llm_session(message: types.Message, state: FSMContext):
 async def stop_llm_session(message: types.Message, state: FSMContext):
     current_state = await state.get_state()
     if current_state == LLMSessionStates.active_session:
+        # Получаем статистику сессии перед закрытием
+        context_manager = await get_session_context(state)
+        session_stats = context_manager.get_session_stats()
+
+        # Очищаем контекст сессии
+        context_manager.clear_session()
+        await save_session_context(state, context_manager)
+
         await state.set_state(RegistrationStates.waiting_for_llm_session)
+
+        stats_text = ""
+        if session_stats["total_messages"] > 0:
+            stats_text = f"\n📊 В диалоге было {session_stats['user_messages']} вопросов и {session_stats['assistant_messages']} ответов"
+
         await message.answer(
-            "🛑 Сессия с AI завершена.\n\n"
+            f"🛑 Сессия с AI завершена.{stats_text}\n\n"
             "Чтобы начать новую сессию, используйте /session или просто напишите сообщение"
         )
     else:
@@ -39,7 +91,23 @@ async def stop_llm_session(message: types.Message, state: FSMContext):
 async def handle_llm_message(message: types.Message, state: FSMContext):
     await message.bot.send_chat_action(message.chat.id, "typing")
 
-    response = await call_llm(message.text, message.from_user.id)
+    # Получаем контекст сессии
+    context_manager = await get_session_context(state)
+
+    # Добавляем сообщение пользователя в контекст
+    context_manager.add_message("user", message.text, message.message_id)
+
+    # Получаем контекст для LLM
+    dialog_context = context_manager.get_context_for_llm()
+
+    # Вызываем LLM с контекстом
+    response = await call_llm(message.text, message.from_user.id, dialog_context)
+
+    # Добавляем ответ ассистента в контекст
+    context_manager.add_message("assistant", response)
+
+    # Сохраняем обновленный контекст
+    await save_session_context(state, context_manager)
 
     await message.answer(response)
 
@@ -64,10 +132,30 @@ async def handle_regular_message(message: types.Message, state: FSMContext):
     )
 
 async def process_start_session(callback: types.CallbackQuery, state: FSMContext):
+    current_state = await state.get_state()
+
+    # Проверяем, уже ли мы в активной сессии
+    if current_state == LLMSessionStates.active_session:
+        # Если уже в сессии, не сбрасываем контекст
+        context_manager = await get_session_context(state)
+        stats = context_manager.get_session_stats()
+
+        await callback.message.edit_text(
+            f"💫 Вы уже в активной сессии с AI!\n\n"
+            f"📊 В текущем диалоге: {stats['user_messages']} вопросов и {stats['assistant_messages']} ответов\n\n"
+            "Продолжайте диалог или используйте /stop для завершения сессии."
+        )
+        await callback.answer()
+        return
+
+    # Только при новой сессии очищаем контекст
+    context_manager = SessionContextManager()
+    await save_session_context(state, context_manager)
+
     await state.set_state(LLMSessionStates.active_session)
     await callback.message.edit_text(
-        "💫 Сессия с AI начата!\n\n"
-        "Теперь все ваши сообщения будут обрабатываться AI. "
+        "💫 Новая сессия с AI начата!\n\n"
+        "Теперь все ваши сообщения будут обрабатываться AI с сохранением контекста диалога. "
         "Для выхода из сессии используйте /stop\n\n"
         "Задавайте ваш вопрос:"
     )
