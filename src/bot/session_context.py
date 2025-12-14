@@ -10,7 +10,7 @@ from dataclasses import dataclass, asdict
 
 @dataclass
 class Message:
-    role: str  # "user" | "assistant"
+    role: str
     content: str
     timestamp: datetime
     message_id: Optional[int] = None
@@ -39,10 +39,8 @@ class SessionContextManager:
             message_id=message_id
         )
 
-        # Добавляем сообщение
         self.messages.append(message)
 
-        # Управляем размером контекста
         self._manage_context_size()
 
     def _manage_context_size(self):
@@ -50,15 +48,12 @@ class SessionContextManager:
         if len(self.messages) <= self.max_recent_messages:
             return
 
-        # Если сообщений много, сжимаем старые
         old_messages = self.messages[:-self.max_recent_messages]
         recent_messages = self.messages[-self.max_recent_messages:]
 
-        # Создаем краткое резюме старых сообщений
         if old_messages:
             self.session_summary = self._create_summary(old_messages)
 
-        # Оставляем только недавние сообщения
         self.messages = recent_messages
 
     def _create_summary(self, messages: List[Message]) -> str:
@@ -69,11 +64,9 @@ class SessionContextManager:
         user_messages = [m.content for m in messages if m.role == "user"]
         assistant_messages = [m.content for m in messages if m.role == "assistant"]
 
-        # Простое извлечение ключевых тем
         topics = []
         for msg in user_messages:
-            if len(msg) > 10:  # Игнорируем очень короткие сообщения
-                # Извлекаем первые слова как тему
+            if len(msg) > 10:
                 words = msg.split()[:8]
                 if len(words) >= 3:
                     topics.append(" ".join(words) + "...")
@@ -91,11 +84,9 @@ class SessionContextManager:
         """Получить контекст для отправки в LLM"""
         context_parts = []
 
-        # Добавляем резюме предыдущего контекста, если есть
         if self.session_summary:
             context_parts.append(f"[Ранее в диалоге: {self.session_summary}]")
 
-        # Добавляем недавние сообщения
         if self.messages:
             context_parts.append("\n--- Текущий контекст диалога ---")
             for msg in self.messages:
@@ -104,9 +95,7 @@ class SessionContextManager:
 
         full_context = "\n".join(context_parts)
 
-        # Обрезаем контекст, если он слишком длинный
         if len(full_context) > self.max_context_length:
-            # Сохраняем резюме и обрезаем старые сообщения
             if self.session_summary:
                 summary_part = f"[Ранее в диалоге: {self.session_summary}]\n"
                 available_length = self.max_context_length - len(summary_part) - 100
@@ -114,7 +103,6 @@ class SessionContextManager:
                 summary_part = ""
                 available_length = self.max_context_length - 100
 
-            # Берем последние сообщения, которые помещаются в лимит
             recent_context = ""
             for msg in reversed(self.messages):
                 role_name = "Пользователь" if msg.role == "user" else "Ассистент"
@@ -172,7 +160,6 @@ class SessionContextManager:
 
         instance.session_summary = data.get("session_summary", "")
 
-        # Восстанавливаем сообщения
         for msg_data in data.get("messages", []):
             msg = Message(
                 role=msg_data["role"],

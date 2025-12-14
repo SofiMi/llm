@@ -165,7 +165,7 @@ class RealRAGBot:
                 parser.batch_size = 5
 
             logger.info("Запуск парсинга канала...")
-            documents = await parser.fetch_channel_posts(channel_link, 5)
+            documents = await parser.fetch_channel_posts(channel_link, limit)
 
             if not documents:
                 return f"❌ Не удалось загрузить посты из канала {channel_link}. Проверьте ссылку и доступность канала."
@@ -284,6 +284,8 @@ class RealRAGBot:
         try:
             # Формируем улучшенный запрос с учетом контекста диалога
             enhanced_query = self._create_enhanced_query(question, dialog_context)
+
+            print(dialog_context)
 
             docs = self.db.query(enhanced_query, topk=topk)
 

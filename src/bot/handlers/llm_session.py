@@ -10,19 +10,10 @@ from bot.db import user_exists
 from bot.session_context import SessionContextManager
 from rag_integration import parse_telegram_channel, query_rag_system, get_rag_stats
 
+manager = SessionContextManager()
+
 async def get_session_context(state: FSMContext) -> SessionContextManager:
-    """Получить или создать менеджер контекста сессии"""
-    data = await state.get_data()
-    context_data = data.get("session_context")
-
-    if context_data:
-        try:
-            return SessionContextManager.from_dict(context_data)
-        except Exception:
-            # Если не удалось восстановить, создаем новый
-            pass
-
-    return SessionContextManager()
+    return manager
 
 async def save_session_context(state: FSMContext, context_manager: SessionContextManager):
     """Сохранить менеджер контекста в состояние"""
@@ -39,9 +30,7 @@ async def start_llm_session(message: types.Message, state: FSMContext):
 
     current_state = await state.get_state()
 
-    # Проверяем, уже ли мы в активной сессии
     if current_state == LLMSessionStates.active_session:
-        # Если уже в сессии, не сбрасываем контекст
         context_manager = await get_session_context(state)
         stats = context_manager.get_session_stats()
 
@@ -52,7 +41,6 @@ async def start_llm_session(message: types.Message, state: FSMContext):
         )
         return
 
-    # Только при новой сессии очищаем контекст
     context_manager = SessionContextManager()
     await save_session_context(state, context_manager)
 
@@ -67,11 +55,9 @@ async def start_llm_session(message: types.Message, state: FSMContext):
 async def stop_llm_session(message: types.Message, state: FSMContext):
     current_state = await state.get_state()
     if current_state == LLMSessionStates.active_session:
-        # Получаем статистику сессии перед закрытием
         context_manager = await get_session_context(state)
         session_stats = context_manager.get_session_stats()
 
-        # Очищаем контекст сессии
         context_manager.clear_session()
         await save_session_context(state, context_manager)
 
@@ -91,22 +77,11 @@ async def stop_llm_session(message: types.Message, state: FSMContext):
 async def handle_llm_message(message: types.Message, state: FSMContext):
     await message.bot.send_chat_action(message.chat.id, "typing")
 
-    # Получаем контекст сессии
     context_manager = await get_session_context(state)
-
-    # Добавляем сообщение пользователя в контекст
     context_manager.add_message("user", message.text, message.message_id)
-
-    # Получаем контекст для LLM
     dialog_context = context_manager.get_context_for_llm()
-
-    # Вызываем LLM с контекстом
     response = await call_llm(message.text, message.from_user.id, dialog_context)
-
-    # Добавляем ответ ассистента в контекст
     context_manager.add_message("assistant", response)
-
-    # Сохраняем обновленный контекст
     await save_session_context(state, context_manager)
 
     await message.answer(response)
@@ -134,9 +109,7 @@ async def handle_regular_message(message: types.Message, state: FSMContext):
 async def process_start_session(callback: types.CallbackQuery, state: FSMContext):
     current_state = await state.get_state()
 
-    # Проверяем, уже ли мы в активной сессии
     if current_state == LLMSessionStates.active_session:
-        # Если уже в сессии, не сбрасываем контекст
         context_manager = await get_session_context(state)
         stats = context_manager.get_session_stats()
 
@@ -148,7 +121,6 @@ async def process_start_session(callback: types.CallbackQuery, state: FSMContext
         await callback.answer()
         return
 
-    # Только при новой сессии очищаем контекст
     context_manager = SessionContextManager()
     await save_session_context(state, context_manager)
 
