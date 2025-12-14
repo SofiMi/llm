@@ -174,10 +174,7 @@ async def add_telegram_channel(message: types.Message):
         await message.answer(
             "📋 Использование: /add_channel <ссылка на канал>\n\n"
             "Примеры:\n"
-            "• /add_channel @channel_name\n"
-            "• /add_channel t.me/channel_name\n"
             "• /add_channel https://t.me/channel_name\n"
-            "• /add_channel test_channel (для тестирования)\n\n"
             "⚡ Будет загружено до 30 последних постов из канала"
         )
         return
